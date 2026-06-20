@@ -97,52 +97,29 @@ mutations via the `grok_set_defaults` tool (not persisted).
 
 ### 3. Refresh the anti-bot challenge (if `/rest/*` starts failing)
 
-grok.com signs every `/rest/*` request with an `x-statsig-id` token derived from
-a per-build **challenge suffix**. When grok ships a new web build it rotates that
-suffix, and until grok-mcp's bundled default is updated to match, signed calls
-fail with:
+grok rotates the `x-statsig-id` **suffix** on new web builds. Until the bundled
+default is updated, signed `/rest/*` calls fail with `code 7 — "Request rejected
+by anti-bot rules."` (auth/rate-limit calls still work, so it can look like an
+auth issue — it isn't). Refresh it without a rebuild:
 
-```
-code 7 — "Request rejected by anti-bot rules."
-```
-
-`grok_check_auth` and `grok_rate_limits` keep working (those endpoints aren't
-signed) — only the chat/research path breaks, which makes this easy to mistake
-for an auth problem. It isn't: it's a stale suffix.
-
-You can refresh it yourself in ~30 seconds, no rebuild required:
-
-1. Open [grok.com](https://grok.com) (logged in) → DevTools → **Console**.
-2. Paste and run this snippet (it intercepts the string grok hashes and prints
-   the suffix tail):
+1. On [grok.com](https://grok.com) (logged in), open DevTools → **Console** and run:
    ```js
-   (() => {
-     const grab = s => { const m = String(s).match(/^[A-Z]+!\/[^!]*!\d+(obf.+)$/);
-       if (m) { console.log('%cx-statsig suffix:', 'color:#0f0', m[1]); window.__grokSuffix = m[1]; } };
-     const oe = TextEncoder.prototype.encode;
-     TextEncoder.prototype.encode = function (s) { try { grab(s); } catch {} return oe.apply(this, arguments); };
-     const sd = crypto?.subtle?.digest;
-     if (sd) crypto.subtle.digest = function (a, d) {
-       try { const b = d.buffer ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d);
-         grab(new TextDecoder().decode(b)); } catch {}
-       return sd.call(crypto.subtle, a, d); };
-     console.log('Hooked — send any message in Grok (or wait ~30s); the suffix prints here.');
-   })();
+   const _e = TextEncoder.prototype.encode;
+   TextEncoder.prototype.encode = function (s) {
+     const m = String(s).match(/^[A-Z]+!\/[^!]*!\d+(obf.+)$/);
+     if (m) console.log("x-statsig suffix:", m[1]);
+     return _e.apply(this, arguments);
+   };
    ```
-3. Send any message in Grok (or wait a few seconds for background polling). The
-   current suffix prints to the console.
-4. Add it under a `[challenge]` table in your config and restart grok-mcp:
+2. Send any message in Grok and copy the logged suffix.
+3. Add a `[challenge]` table to your config and restart (all three keys required;
+   `header_hex` is server-ignored, so any 49-byte hex works):
    ```toml
    [challenge]
-   suffix     = "<the printed suffix>"
-   # `header` is a per-load browser fingerprint grok does NOT validate — any
-   # 49-byte hex works, so just reuse the shipped default below. `trailer` has
-   # been stable at 3 across builds.
-   header_hex = "00e75303b31347389b6cef79ff5b31b921b8a257fe00d9f87cb7139a435cc095ab2a19c397a93746e5d27c41ffd519b5e1"
+   suffix     = "<printed suffix>"
    trailer    = 3
+   header_hex = "00e75303b31347389b6cef79ff5b31b921b8a257fe00d9f87cb7139a435cc095ab2a19c397a93746e5d27c41ffd519b5e1"
    ```
-   All three keys are required together — or omit the table entirely to fall
-   back to the built-in defaults.
 
 > The header and trailer almost never change; in practice a rotation only needs
 > the new `suffix`. If you confirm a fresh suffix, please open a PR bumping
