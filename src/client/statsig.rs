@@ -10,7 +10,7 @@
 //! byte and base64-encoded (standard alphabet, no padding):
 //!
 //! ```text
-//! raw[70] = header[49]            // build-specific static fingerprint
+//! raw[70] = header[49]            // per-load browser fingerprint; NOT checked server-side
 //!         | counter_le32[4]       // floor(unix_secs) - EPOCH, little-endian u32
 //!         | sha256(sig_input)[..16]
 //!         | trailer[1]            // build-specific constant byte
@@ -18,10 +18,14 @@
 //! token = base64_no_pad(raw[i] ^ key) for a fresh random key byte
 //! ```
 //!
-//! The three build-specific constants (`header`, `suffix`, `trailer`) are baked
-//! into the challenge bundle and rotate when grok.com ships a new build. They
-//! live in [`ChallengeConfig`] so they can be refreshed via config without a
-//! rebuild. See `README.md` for the browser-console extraction snippet.
+//! Of these three constants only `suffix` is actually validated server-side (it
+//! feeds the SHA-256), and grok.com rotates it whenever it ships a new web build
+//! — after which a stale `suffix` makes every `/rest/*` call fail with `code 7`.
+//! `header` is a per-load browser fingerprint the server does not check (any
+//! well-formed 49-byte value is accepted) and `trailer` has been stable across
+//! builds. All three live in [`ChallengeConfig`] so `suffix` can be refreshed
+//! via config without a rebuild. See `README.md` for the browser-console snippet
+//! that prints the current `suffix`.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD as BASE64_STANDARD_NO_PAD};
 use rand::RngExt;
@@ -143,16 +147,20 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>> {
         .collect::<Result<Vec<u8>>>()
 }
 
-/// Default 49-byte challenge header for the grok.com build observed at
-/// implementation time.
+/// Default 49-byte challenge header. This is a per-load browser fingerprint that
+/// grok.com does NOT validate server-side: any well-formed 49-byte value is
+/// accepted, so this constant does not need refreshing on a build bump. Real
+/// sample captured from the `bdd82a93` build (2026-06-20).
 const DEFAULT_HEADER: [u8; HEADER_LEN] = [
-    0, 122, 70, 242, 98, 14, 77, 131, 83, 59, 177, 38, 245, 253, 115, 245, 175, 81, 112, 97, 208,
-    249, 85, 40, 164, 211, 58, 50, 153, 80, 71, 147, 212, 236, 53, 119, 26, 174, 57, 154, 194, 36,
-    75, 132, 237, 238, 165, 2, 144,
+    0, 231, 83, 3, 179, 19, 71, 56, 155, 108, 239, 121, 255, 91, 49, 185, 33, 184, 162, 87, 254,
+    0, 217, 248, 124, 183, 19, 154, 67, 92, 192, 149, 171, 42, 25, 195, 151, 169, 55, 70, 229,
+    210, 124, 65, 255, 213, 25, 181, 225,
 ];
 
-/// Default challenge suffix for the grok.com build observed at implementation time.
-const DEFAULT_SUFFIX: &str = "obfiowerehiringbd855e10170a3d70a3d70a0170a3d70a3d70a100";
+/// Default challenge suffix — the only challenge constant grok.com validates.
+/// Refreshed from the `bdd82a93` build (2026-06-20). Rotate it via the
+/// `[challenge]` config table when grok ships a new build (see README).
+const DEFAULT_SUFFIX: &str = "obfiowerehiringcb83bd0d70a3d70a3d70808a3d70a3d70a408a3d70a3d70a40d70a3d70a3d70800";
 
 /// Default challenge trailer byte for the grok.com build observed at implementation time.
 const DEFAULT_TRAILER: u8 = 3;
