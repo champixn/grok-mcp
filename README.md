@@ -97,12 +97,16 @@ mutations via the `grok_set_defaults` tool (not persisted).
 
 ### 3. Refresh the anti-bot challenge (if `/rest/*` starts failing)
 
-grok rotates the `x-statsig-id` **suffix** on new web builds. Until the bundled
-default is updated, signed `/rest/*` calls fail with `code 7 — "Request rejected
-by anti-bot rules."` (auth/rate-limit calls still work, so it can look like an
-auth issue — it isn't). Refresh it without a rebuild:
+grok rotates the `x-statsig-id` challenge constants on new web builds. Until the
+bundled defaults are updated, signed `/rest/*` calls fail with `code 7 — "Request
+rejected by anti-bot rules."` or `"This page is out of date"` (auth and
+rate-limit calls are unsigned and keep working, so it can look like an auth
+issue — it isn't). Both `suffix` and `header_hex` rotate and **both** have to be
+refreshed: on build `c03ea8e5` (2026-09-10) a fresh `suffix` with a stale
+`header_hex` still failed. Refresh them without a rebuild:
 
-1. On [grok.com](https://grok.com) (logged in), open DevTools → **Console** and run:
+1. On [grok.com](https://grok.com) (logged in), open DevTools → **Console** and
+   hook the signer:
    ```js
    const _e = TextEncoder.prototype.encode;
    TextEncoder.prototype.encode = function (s) {
@@ -112,18 +116,30 @@ auth issue — it isn't). Refresh it without a rebuild:
    };
    ```
 2. Send any message in Grok and copy the logged suffix.
-3. Add a `[challenge]` table to your config and restart (all three keys required;
-   `header_hex` is server-ignored, so any 49-byte hex works):
+3. In DevTools → **Network**, open any `/rest/*` request, copy its
+   `x-statsig-id` request header, and decode the header blob in the Console:
+   ```js
+   const id = "<paste x-statsig-id>";
+   const u = Uint8Array.from(atob(id), (c) => c.charCodeAt(0));
+   const key = u[0]; // header[0] is always 0x00, so the XOR mask leaks in byte 0
+   console.log(
+     "header_hex:",
+     [...u.slice(0, 49)].map((b) => (b ^ key).toString(16).padStart(2, "0")).join(""),
+   );
+   ```
+4. Put both into your config and restart (all three keys required):
    ```toml
    [challenge]
    suffix     = "<printed suffix>"
+   header_hex = "<printed header_hex>"
    trailer    = 3
-   header_hex = "00e75303b31347389b6cef79ff5b31b921b8a257fe00d9f87cb7139a435cc095ab2a19c397a93746e5d27c41ffd519b5e1"
    ```
 
-> The header and trailer almost never change; in practice a rotation only needs
-> the new `suffix`. If you confirm a fresh suffix, please open a PR bumping
-> `DEFAULT_SUFFIX` in `src/client/statsig.rs` so everyone benefits.
+> `trailer` has been `3` on every build so far. Verify a capture before trusting
+> it: `sha256("{METHOD}!{path}!{counter}" + suffix)[..16]` must equal bytes
+> 53..69 of the decoded token, where `counter` is the LE u32 at bytes 49..53.
+> If you confirm a fresh pair, please open a PR bumping `DEFAULT_SUFFIX` and
+> `DEFAULT_HEADER` in `src/client/statsig.rs` so everyone benefits.
 
 ## CLI
 
